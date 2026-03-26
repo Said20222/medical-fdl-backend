@@ -1,15 +1,26 @@
 from fastapi import FastAPI
+from app.api.health import router as health_router
+from app.api.predict import router as predict_router
+from app.api.rag_debug import router as rag_debug_router
+from app.api.llm_debug import router as llm_debug_router
+from app.api.copilot import router as copilot_router
 from sklearn.datasets import load_iris
 from sklearn.naive_bayes import GaussianNB
-from datatypes import IrisFeatures
+from app.datatypes import IrisFeatures
 
 app = FastAPI(title="Medical FDL API", description="An API to get model predictions", version="1.0.0")
 
+app.include_router(health_router)
+app.include_router(predict_router)
+app.include_router(rag_debug_router)
+app.include_router(llm_debug_router)
+app.include_router(copilot_router)
+
 @app.get("/")
-def home():
+def root():
     return {"message": "Welcome to the Medical FDL API"}
 
-# Load Iris dataset
+# Load Iris dataset 
 iris = load_iris()
 
 # Extract features and labels
@@ -29,3 +40,4 @@ def predict(data: IrisFeatures):
     ]]
     class_idx = clf.predict(test_data)[0]
     return {"class": iris.target_names[class_idx]}
+

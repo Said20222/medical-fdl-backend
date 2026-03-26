@@ -1,0 +1,4 @@
+fastapi[standard]
+chromadb
+httpx
+python-dotenv
