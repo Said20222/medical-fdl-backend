@@ -2,8 +2,9 @@ import json, re
 from app.services.chroma_store import ChromaStore
 from app.services.llm_client import LLMClient
 
+
 def _word_overlap(text: str, terms: list[str]) -> bool:
-    # FIX: word-boundary aware — avoids 'age' falsely matching 'stage'
+    # Word-boundary aware — avoids 'age' falsely matching 'stage'
     words = set(re.findall(r'[a-z_][a-z0-9_]*', text.lower()))
     return any(t.lower() in words for t in terms)
 
@@ -17,26 +18,28 @@ class CopilotService:
         if not retrieved:
             return True, "No documents were retrieved from the knowledge base."
 
-        top_features = explanation_payload.get("top_features", [])
-        fired_rules = explanation_payload.get("fired_rules", [])
+        # FIX: use anfis_rules (actual PredictResponse field), not fired_rules/top_features
+        anfis_rules = explanation_payload.get("anfis_rules", [])
 
-        feature_names = [feature["name"].lower() for feature in top_features]
-        rule_ids = [rule["id"].lower() for rule in fired_rules]
+        # Extract condition keywords from ANFIS rules e.g. "age=HIGH & tumor_size=MED"
+        rule_terms = []
+        for rule in anfis_rules:
+            conditions = rule.get("conditions", "") if isinstance(rule, dict) else getattr(rule, "conditions", "")
+            rule_terms += re.findall(r'[a-z_][a-z0-9_]*', conditions.lower())
 
         retrieved_text = " ".join(item["text"].lower() for item in retrieved)
-        if not _word_overlap(retrieved_text, feature_names) and \
-                not _word_overlap(retrieved_text, rule_ids):
-            return True, "Retrieved docs don't align with model features or rules."
+        if not _word_overlap(retrieved_text, rule_terms):
+            return True, "Retrieved docs don't align with model ANFIS rules."
         return False, ""
-    
+
     def _build_retrieval_query(self, question: str, explanation_payload: dict) -> str:
-        top_features = explanation_payload.get("top_features", [])
-        fired_rules = explanation_payload.get("fired_rules", [])
-
-        feature_names = [feature["name"] for feature in top_features]
-        rule_ids = [rule["id"] for rule in fired_rules]
-
-        parts = [question] + feature_names + rule_ids
+        # FIX: build query from anfis_rules conditions
+        anfis_rules = explanation_payload.get("anfis_rules", [])
+        rule_terms = []
+        for rule in anfis_rules:
+            conditions = rule.get("conditions", "") if isinstance(rule, dict) else getattr(rule, "conditions", "")
+            rule_terms += re.findall(r'[a-z_][a-z0-9_]*', conditions.lower())
+        parts = [question] + list(dict.fromkeys(rule_terms))  # deduplicated, order-preserving
         return " ".join(parts)
 
     async def generate_answer(self, question: str, explanation_payload: dict):
@@ -70,7 +73,7 @@ Question:
 {question}
 
 Model Output:
-{explanation_payload}
+{json.dumps(explanation_payload, indent=2)}
 
 Retrieved Context:
 {context_text}
@@ -97,6 +100,6 @@ Return this exact JSON shape:
   "uncertainty": "string"
 }}
 """
-
-        raw_response = self.llm.chat(system_prompt, user_prompt)
+        # FIX: await the async chat call (was missing await, returning coroutine object)
+        raw_response = await self.llm.chat(system_prompt, user_prompt)
         return raw_response, retrieved

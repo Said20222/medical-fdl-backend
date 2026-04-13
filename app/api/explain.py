@@ -1,9 +1,10 @@
 import asyncio
 import concurrent.futures
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.schemas.predict import PredictRequest
 from app.model_loader import load_artifacts
 from app.inference import run_single
+from app.core.auth import require_api_key
 
 router = APIRouter(prefix="/api", tags=["explain"])
 _pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -47,7 +48,7 @@ def _get_membership_params(artifacts: dict) -> list[dict]:
         return []  # graceful degradation if ANFIS attribute path differs
 
 
-@router.post("/rules")
+@router.post("/rules", dependencies=[Depends(require_api_key)])
 async def explain_rules(req: PredictRequest):
     """Returns fired fuzzy rules + full membership function parameters per feature."""
     arts = load_artifacts()

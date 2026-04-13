@@ -1,3 +1,4 @@
+import json
 from pydantic import ValidationError
 from fastapi import APIRouter, HTTPException, Depends
 from app.schemas.copilot import CopilotRequest, CopilotResponse
@@ -11,7 +12,6 @@ router = APIRouter(prefix="/api", tags=["copilot"])
 async def copilot_answer(req: CopilotRequest):
     service = CopilotService()
     try:
-        # FIX: await the now-async generate_answer
         raw, retrieved = await service.generate_answer(
             question=req.question,
             explanation_payload=req.explanation_payload.model_dump(),
@@ -19,9 +19,11 @@ async def copilot_answer(req: CopilotRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # FIX: strip markdown fences the LLM sometimes emits before JSON.loads
+    cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     try:
-        parsed = CopilotResponse.model_validate_json(raw)
-    except ValidationError:
-        raise HTTPException(status_code=502, detail="LLM returned non-JSON.")
+        parsed = CopilotResponse.model_validate(json.loads(cleaned))
+    except (ValidationError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=502, detail=f"LLM returned invalid JSON: {e}")
 
     return parsed
