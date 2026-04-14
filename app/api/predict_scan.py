@@ -6,21 +6,27 @@ Multipart /api/predict-scan endpoint.
 Clinicians upload raw scan files (.dcm / .nii / .nii.gz / .zip of DICOM
 series) directly — no offline pre-extraction step is required.
 
+Prerequisite
+------------
+MedicalNet ResNet-10 weights (~45 MB) must be placed at:
+  artifacts/medicalnet_weights.pth
+Download: https://huggingface.co/TencentMedicalNet/MedicalNet-Resnet10
+
 Request (multipart/form-data)
 -----------------------------
   subject_id   : str               (form field)
   clinical     : str               (JSON form field, ClinicalFeatures)
-  modality     : str, optional     (form field, default inferred from file ext)
-  <modality>   : UploadFile, ...   (one file per modality, e.g. field name "MRI")
+  MRI          : UploadFile        (optional .nii / .nii.gz)
+  CT           : UploadFile        (optional .dcm file, DICOM folder zip, or .nii)
+  PET          : UploadFile        (optional .nii / .nii.gz)
 
 Example curl
 ------------
   curl -X POST http://localhost:8080/api/predict-scan \\
     -H "X-API-Key: $KEY" \\
     -F subject_id=PAT001 \\
-    -F 'clinical={"features":{"age":72,"tumor_size":2.1}}' \\
-    -F 'MRI=@/data/PAT001_brain.nii.gz' \\
-    -F 'modality=MRI'
+    -F 'clinical={"features":{"Age":72,"MMSE":24.0}}' \\
+    -F 'MRI=@/data/PAT001_brain.nii.gz'
 """
 
 from __future__ import annotations
@@ -46,13 +52,10 @@ from app.schemas.predict import ClinicalFeatures, PredictRequest, PredictRespons
 from app.services.scan_extractor import extract_features, _guess_modality
 
 router = APIRouter(prefix="/api", tags=["predict"])
-_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+_pool  = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 # File extensions that are directly accepted
 _ACCEPTED_EXTS = {".nii", ".gz", ".dcm", ".img", ".hdr", ".zip"}
-
-# Supported modality field names
-_KNOWN_MODALITIES = {"MRI", "CT", "PET"}
 
 # Maximum allowed upload size per scan file (500 MB).
 # DICOM series can be several GB; reject oversized uploads early to prevent OOM.
@@ -93,23 +96,22 @@ async def _save_upload(upload: UploadFile, dest: Path) -> None:
     dependencies=[Depends(require_api_key)],
 )
 async def predict_from_scan(
-    subject_id: str = Form(..., description="Patient / subject identifier"),
-    clinical: str = Form(..., description="JSON-encoded ClinicalFeatures: {\"features\": {\"age\": 72, ...}}"),
-    # Optional per-modality scan files — use field names matching modality names
+    subject_id: str           = Form(..., description="Patient / subject identifier"),
+    clinical:   str           = Form(..., description='JSON ClinicalFeatures: {"features": {"Age": 72, ...}}'),
     MRI: Optional[UploadFile] = File(default=None, description="MRI scan (.nii / .nii.gz)"),
-    CT: Optional[UploadFile] = File(default=None, description="CT scan (.dcm file, DICOM folder zip, or .nii)"),
+    CT:  Optional[UploadFile] = File(default=None, description="CT scan (.dcm, DICOM folder zip, or .nii)"),
     PET: Optional[UploadFile] = File(default=None, description="PET scan (.nii / .nii.gz)"),
 ):
-    # ── 1. Parse and validate clinical JSON ───────────────────────────────────
+    # -- 1. Parse and validate clinical JSON ----------------------------------
     try:
         clinical_data = ClinicalFeatures.model_validate(json.loads(clinical))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid clinical JSON: {e}")
 
     uploaded: dict[str, UploadFile] = {}
-    if MRI is not None:  uploaded["MRI"] = MRI
-    if CT  is not None:  uploaded["CT"]  = CT
-    if PET is not None:  uploaded["PET"] = PET
+    if MRI is not None: uploaded["MRI"] = MRI
+    if CT  is not None: uploaded["CT"]  = CT
+    if PET is not None: uploaded["PET"] = PET
 
     if not uploaded:
         raise HTTPException(
@@ -117,21 +119,38 @@ async def predict_from_scan(
             detail="At least one scan file must be provided (MRI, CT, or PET field).",
         )
 
-    # ── 2. Validate file extensions ───────────────────────────────────────────
+    # -- 2. Validate file extensions ------------------------------------------
     for mod_name, upload in uploaded.items():
         if not _ext_ok(upload.filename or ""):
             raise HTTPException(
                 status_code=415,
                 detail=(
                     f"Unsupported file type for {mod_name}: '{upload.filename}'. "
-                    f"Accepted: .nii, .nii.gz, .dcm, .zip"
+                    "Accepted: .nii, .nii.gz, .dcm, .zip"
                 ),
             )
 
-    arts = load_artifacts()
+    arts   = load_artifacts()
     device = arts["device"]
 
-    # ── 3. Save uploads to temp dir, run extractor, collect b64 features ──────
+    # -- 3. Early check: fail fast if MedicalNet weights are missing -----------
+    # _resolve_weights_path() inside scan_extractor will raise FileNotFoundError
+    # during the first extract_features() call. We surface a clean 503 here
+    # rather than a raw 500 traceback.
+    from app.services.scan_extractor import _resolve_weights_path
+    try:
+        _resolve_weights_path()
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MedicalNet backbone weights are not installed on this server. "
+                "Place resnet_10_23dataset.pth at artifacts/medicalnet_weights.pth. "
+                f"Details: {e}"
+            ),
+        )
+
+    # -- 4. Save uploads to temp dir, extract features, collect b64 -----------
     modalities_b64: dict[str, str] = {}
     tmp_root = tempfile.mkdtemp(prefix="scan_upload_")
 
@@ -159,6 +178,8 @@ async def predict_from_scan(
                     status_code=504,
                     detail=f"Feature extraction timed out for modality '{mod_name}'.",
                 )
+            except FileNotFoundError as e:
+                raise HTTPException(status_code=503, detail=str(e))
             except Exception as e:
                 raise HTTPException(
                     status_code=422,
@@ -173,7 +194,7 @@ async def predict_from_scan(
 
             modalities_b64[mod_name] = _npz_to_b64(features)
 
-        # ── 4. Build a standard PredictRequest and call run_single ────────────
+        # -- 5. Build a standard PredictRequest and call run_single -----------
         req = PredictRequest(
             subject_id=subject_id,
             clinical=clinical_data,
@@ -195,5 +216,5 @@ async def predict_from_scan(
         return result
 
     finally:
-        # Always clean up temp files
+        # Always clean up temp files regardless of success or failure
         shutil.rmtree(tmp_root, ignore_errors=True)

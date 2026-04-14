@@ -13,6 +13,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # the CPU result if called before CUDA is initialised.
 _ARTIFACTS: dict | None = None
 
+# Canonical MedicalNet weights path exposed so scan_extractor.py can read it
+# from the already-loaded artifact dict instead of duplicating path logic.
+MEDICALNET_WEIGHTS_PATH = ARTIFACTS / "medicalnet_weights.pth"
+
 
 def load_artifacts() -> dict:
     global _ARTIFACTS
@@ -25,7 +29,7 @@ def load_artifacts() -> dict:
         weights_only=False,
     )
 
-    # ── Rebuild ModalityConfig list from saved dicts ───────────────────────────
+    # -- Rebuild ModalityConfig list from saved dicts --------------------------
     modality_configs = [
         ModalityConfig(
             name=m["name"],
@@ -35,7 +39,7 @@ def load_artifacts() -> dict:
         for m in ckpt["modality_configs"]
     ]
 
-    # ── Rebuild model ──────────────────────────────────────────────────────────
+    # -- Rebuild model ---------------------------------------------------------
     model = AgnosticHybridFusion(
         modality_configs=modality_configs,
         clinical_dim=len(ckpt["selected_features"]),
@@ -44,44 +48,47 @@ def load_artifacts() -> dict:
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    # ── Rebuild scaler from saved mean/scale ──────────────────────────────────
+    # -- Rebuild scaler from saved mean/scale ----------------------------------
     scaler = StandardScaler()
-    scaler.mean_ = np.array(ckpt["scaler_mean"], dtype=np.float64)
-    scaler.scale_ = np.array(ckpt["scaler_scale"], dtype=np.float64)
-    scaler.var_ = scaler.scale_ ** 2
+    scaler.mean_          = np.array(ckpt["scaler_mean"],  dtype=np.float64)
+    scaler.scale_         = np.array(ckpt["scaler_scale"], dtype=np.float64)
+    scaler.var_           = scaler.scale_ ** 2
     scaler.n_features_in_ = len(scaler.mean_)
 
-    # ── Load Platt calibrator saved separately as platt_calibrator.pkl ──────────
+    # -- Load Platt calibrator saved separately as platt_calibrator.pkl -------
     calibrator = None
     calibrator_path = ARTIFACTS / "platt_calibrator.pkl"
     if calibrator_path.exists():
         with open(calibrator_path, "rb") as f:
             calibrator = pickle.load(f)
 
-    # ── GPU warm-up: initialise CUDA kernels before first real request ─────────
+    # -- GPU warm-up: initialise CUDA kernels before first real request --------
     _warmup(model, modality_configs, len(ckpt["selected_features"]))
 
     # Cast train_medians values to Python float to avoid numpy dtype mismatches
     # during median imputation in inference.py (_impute_and_scale). Checkpoints
     # may store medians as numpy.float32/float64 depending on the training script.
-    raw_medians = ckpt["train_medians"]
+    raw_medians   = ckpt["train_medians"]
     train_medians = {k: float(v) for k, v in raw_medians.items()}
 
     _ARTIFACTS = {
-        "model":            model,
-        "modality_configs": modality_configs,   # list[ModalityConfig] — used directly in inference.py
-        "scaler":           scaler,
-        "calibrator":       calibrator,         # LogisticRegression | None
-        "features":         ckpt["selected_features"],
-        "threshold":        float(ckpt["val_thresh"]),
-        "train_medians":    train_medians,
-        "n_fuzzy_sets":     ckpt["n_fuzzy_sets"],   # int — used directly in inference.py
-        "dataset":          ckpt["dataset"],
-        "target_names":     ckpt["target_names"],
-        "device":           DEVICE,
-        "val_bacc":         float(ckpt["val_bacc"]),
-        "val_auc":          float(ckpt["val_auc"]),
-        "best_epoch":       int(ckpt["epoch"]),
+        "model":                   model,
+        "modality_configs":        modality_configs,
+        "scaler":                  scaler,
+        "calibrator":              calibrator,
+        "features":                ckpt["selected_features"],
+        "threshold":               float(ckpt["val_thresh"]),
+        "train_medians":           train_medians,
+        "n_fuzzy_sets":            ckpt["n_fuzzy_sets"],
+        "dataset":                 ckpt["dataset"],
+        "target_names":            ckpt["target_names"],
+        "device":                  DEVICE,
+        "val_bacc":                float(ckpt["val_bacc"]),
+        "val_auc":                 float(ckpt["val_auc"]),
+        "best_epoch":              int(ckpt["epoch"]),
+        # Canonical path for MedicalNet backbone weights used by scan_extractor.
+        # scan_extractor.py reads this value so weight path logic lives in one place.
+        "medicalnet_weights_path": MEDICALNET_WEIGHTS_PATH,
     }
     return _ARTIFACTS
 
