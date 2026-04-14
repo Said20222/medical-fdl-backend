@@ -20,8 +20,15 @@ Quick start
 
 Dependencies
 ------------
-   pip install torch nibabel pydicom tqdm
-   pip install SimpleITK  # optional but recommended for robust DICOM loading
+   pip install torch nibabel pydicom
+   pip install tqdm          # only needed for offline batch extraction
+   pip install SimpleITK     # optional but recommended for robust DICOM loading
+
+NOTE: tqdm is intentionally NOT imported at module level.
+It is a training/offline-only dependency. A lazy import inside
+extract_and_save_features() ensures the deployment server never
+crashes with ImportError just because tqdm is absent from the
+production image.
 """
 
 import os
@@ -37,7 +44,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import nibabel as nib
-from tqdm import tqdm
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS (must match ModalityConfig.input_dim in your AG-HFD checkpoint)
@@ -470,7 +476,7 @@ def preprocess(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PART 6 — Dataset discovery helpers
+# PART 6 — Dataset discovery helpers  (OFFLINE USE ONLY — not called in deployment)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -561,7 +567,7 @@ def find_dicom_series(root: str, modality: str = "CT") -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PART 7 — Batch extraction
+# PART 7 — Batch extraction  (OFFLINE USE ONLY — not called in deployment)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -591,6 +597,11 @@ def extract_and_save_features(
     -------
     manifest : dict  subject_id → {feature_path, status}
     """
+    # Lazy import — tqdm is an offline-only dependency not required in deployment.
+    # Importing it here (not at module level) means the server will never crash
+    # with ImportError if tqdm is absent from the production Docker image.
+    from tqdm import tqdm
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dev = torch.device(device)
@@ -669,7 +680,7 @@ def extract_and_save_features(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PART 8 — Verification utility
+# PART 8 — Verification utility  (OFFLINE USE ONLY — not called in deployment)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -725,7 +736,7 @@ def verify_features(output_dir: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PART 9 — Local test harness
+# PART 9 — Local test harness  (OFFLINE USE ONLY — gated by __main__)
 # ═════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
@@ -773,7 +784,7 @@ if __name__ == "__main__":
             records          = records,
             output_dir       = OUTPUT_DIR,
             weights_path     = WEIGHTS_PATH,
-            backbone         = "resnet10",   # resnet_10_23dataset — swap to resnet18/34/50 for more capacity
+            backbone         = "resnet10",   # swap to resnet18/34/50 for more capacity
             device           = None,          # auto-detect GPU / CPU
         )
 
