@@ -7,12 +7,6 @@ class TopFeature(BaseModel):
     weight: float
 
 
-class FiredRule(BaseModel):
-    id: str
-    description: str
-    strength: Optional[float] = None
-
-
 # ── Single-sample input ───────────────────────────────────────────────────────────
 class ClinicalFeatures(BaseModel):
     """Key-value map of clinical feature name → float value."""
@@ -32,6 +26,7 @@ class BatchPredictRequest(BaseModel):
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
 class FuzzyRule(BaseModel):
+    """Active ANFIS rule schema. conditions e.g. 'MMSE=LOW & nWBV=LOW'."""
     conditions: str
     strength: float
 

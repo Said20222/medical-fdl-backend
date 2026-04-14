@@ -61,6 +61,12 @@ def load_artifacts() -> dict:
     # ── GPU warm-up: initialise CUDA kernels before first real request ─────────
     _warmup(model, modality_configs, len(ckpt["selected_features"]))
 
+    # Cast train_medians values to Python float to avoid numpy dtype mismatches
+    # during median imputation in inference.py (_impute_and_scale). Checkpoints
+    # may store medians as numpy.float32/float64 depending on the training script.
+    raw_medians = ckpt["train_medians"]
+    train_medians = {k: float(v) for k, v in raw_medians.items()}
+
     _ARTIFACTS = {
         "model":            model,
         "modality_configs": modality_configs,   # list[ModalityConfig] — used directly in inference.py
@@ -68,7 +74,7 @@ def load_artifacts() -> dict:
         "calibrator":       calibrator,         # LogisticRegression | None
         "features":         ckpt["selected_features"],
         "threshold":        float(ckpt["val_thresh"]),
-        "train_medians":    ckpt["train_medians"],
+        "train_medians":    train_medians,
         "n_fuzzy_sets":     ckpt["n_fuzzy_sets"],   # int — used directly in inference.py
         "dataset":          ckpt["dataset"],
         "target_names":     ckpt["target_names"],

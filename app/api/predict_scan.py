@@ -54,6 +54,10 @@ _ACCEPTED_EXTS = {".nii", ".gz", ".dcm", ".img", ".hdr", ".zip"}
 # Supported modality field names
 _KNOWN_MODALITIES = {"MRI", "CT", "PET"}
 
+# Maximum allowed upload size per scan file (500 MB).
+# DICOM series can be several GB; reject oversized uploads early to prevent OOM.
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
+
 
 def _ext_ok(filename: str) -> bool:
     return Path(filename).suffix.lower() in _ACCEPTED_EXTS
@@ -68,8 +72,17 @@ def _npz_to_b64(features: np.ndarray) -> str:
 
 
 async def _save_upload(upload: UploadFile, dest: Path) -> None:
-    """Stream an UploadFile to disk asynchronously."""
+    """Stream an UploadFile to disk, enforcing the size limit."""
     contents = await upload.read()
+    if len(contents) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Upload for '{upload.filename}' exceeds the 500 MB limit "
+                f"({len(contents) / 1024 / 1024:.1f} MB received). "
+                "Pre-extract NPZ features offline and use /api/predict instead."
+            ),
+        )
     dest.write_bytes(contents)
 
 
