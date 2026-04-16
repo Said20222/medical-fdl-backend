@@ -19,6 +19,7 @@ env
 docs_build
 site_build
 venv
+.venv/
 docs.zip
 archive.zip
 
@@ -31,3 +32,8 @@ archive.zip
 .DS_Store
 
 .codspeed
+weights/resnet_10_23dataset.pth
+artifacts/platt_calibrator.pkl
+artifacts/best_model.pth
+chroma.sqlite3
+chroma_data/

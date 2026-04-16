@@ -59,8 +59,12 @@ def load_artifacts() -> dict:
     calibrator = None
     calibrator_path = ARTIFACTS / "platt_calibrator.pkl"
     if calibrator_path.exists():
-        with open(calibrator_path, "rb") as f:
-            calibrator = pickle.load(f)
+        try: 
+            with open(calibrator_path, "rb") as f:
+                calibrator = pickle.load(f)
+        except Exception as e:
+            print(f"Warning: Failed to load Platt calibrator: {e}")
+            calibrator = None
 
     # -- GPU warm-up: initialise CUDA kernels before first real request --------
     _warmup(model, modality_configs, len(ckpt["selected_features"]))

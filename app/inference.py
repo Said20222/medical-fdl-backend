@@ -87,11 +87,7 @@ def run_single(req: PredictRequest, artifacts: dict) -> PredictResponse:
         logit = logit.float()
 
     # ── 4. Calibrated probability ─────────────────────────────────────────────
-    if calibrator is not None:
-        logit_np = logit.detach().cpu().numpy().reshape(-1, 1)
-        prob = float(calibrator.predict_proba(logit_np)[0, 1])
-    else:
-        prob = float(torch.sigmoid(logit).item())
+    prob = float(torch.sigmoid(logit).item())
 
     # ── 5. Assemble response ──────────────────────────────────────────────────
     gate   = gate_w[0].cpu().numpy()
